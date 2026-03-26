@@ -6,27 +6,20 @@ import plotly.graph_objects as go
 import requests
 import io
 
-# 1. CONFIGURACIÓN Y ESTÉTICA DARK
-st.set_page_config(
-    page_title="Expreso Diemar - Fleet Analytics",
-    page_icon="🚛",
-    layout="wide",
-)
+# 1. CONFIGURACIÓN Y ESTÉTICA "ECO-DARK"
+st.set_page_config(page_title="Expreso Diemar - Carbon Tracker", layout="wide")
 
 st.markdown("""
     <style>
     .stApp {
         background: linear-gradient(rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.9)), 
                     url("https://raw.githubusercontent.com/nicolascolonna23/DetectorDesvios/main/IMG_3101.jpg"); 
-        background-size: cover;
-        background-attachment: fixed;
+        background-size: cover; background-attachment: fixed;
     }
-    [data-testid="stSidebar"] { background-color: rgba(10, 10, 10, 0.98); }
+    [data-testid="stSidebar"] { background-color: rgba(10, 15, 10, 0.98); }
     .stMetric {
         background-color: rgba(255, 255, 255, 0.05);
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #1565c0;
+        padding: 15px; border-radius: 10px; border-top: 4px solid #2e7d32;
     }
     h1, h2, h3, h4, span, p { color: white !important; }
     </style>
@@ -37,7 +30,6 @@ st.markdown("""
 def get_data():
     u1 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQCCJG7r9T2JTb0eAdpQU1ggAcTn9ZELfjq58Xk9-eqj58o?download=1"
     u2 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQAWlrsay0HVT622_ANLB-bWAfMlRi4IHHFMH6DJBzVW3BU?download=1"
-    
     headers = {'User-Agent': 'Mozilla/5.0'}
     
     def download(url):
@@ -53,134 +45,89 @@ def get_data():
             d['DOMINIO'] = d['DOMINIO'].astype(str).str.replace(' ', '').str.upper()
         if 'FECHA' in d.columns:
             d['FECHA_DT'] = pd.to_datetime(d['FECHA'], errors='coerce')
-            d['MES'] = d['FECHA_DT'].dt.strftime('%B %Y')
+            d['MES_VAL'] = d['FECHA_DT'].dt.to_period('M')
 
     df = pd.merge(df_tel, df_con, on="DOMINIO", suffixes=('_tel', '_con'))
-    
-    # Rango de fechas sugerido para ver datos reales
-    if not df.empty and 'FECHA_DT_tel' in df.columns:
-        df = df[(df['FECHA_DT_tel'] >= '2025-12-01') & (df['FECHA_DT_tel'] <= '2026-03-31')].copy()
-
     return df
 
 try:
     df_full = get_data()
 except Exception as e:
-    st.error(f"❌ Error: {e}")
-    st.stop()
+    st.error(f"❌ Error: {e}"); st.stop()
 
-# 3. SIDEBAR - NAVEGACIÓN Y FILTROS
+# 3. SIDEBAR
 with st.sidebar:
     st.image("logo_diemar4.png", use_container_width=True)
+    st.title("🌿 Carbon Control")
     st.divider()
-    portal = st.radio("Sección:", ["📊 Desempeño", "⛽ Combustible & Costos", "🌿 Emisiones"])
-    
-    st.divider()
-    if not df_full.empty:
-        meses = ["Todos"] + sorted(df_full["MES_tel"].dropna().unique().tolist())
-        mes_sel = st.selectbox("📅 Filtrar Mes", meses)
-        
-        marcas = ["Todas"] + sorted(df_full["MARCA"].dropna().unique().tolist())
-        marca_sel = st.selectbox("🏭 Marca", marcas)
-        
-        patentes = sorted(df_full["DOMINIO"].unique().tolist())
-        sel_patentes = st.multiselect("🚚 Patentes Específicas", patentes)
+    meses_disponibles = sorted(df_full["MES_VAL_tel"].unique().tolist())
+    mes_sel = st.selectbox("📅 Seleccionar Mes de Análisis", meses_disponibles)
+    marca_sel = st.selectbox("🏭 Marca", ["Todas"] + sorted(df_full["MARCA"].unique().tolist()))
 
-# Aplicar Filtros
-df = df_full.copy()
-if mes_sel != "Todos": df = df[df["MES_tel"] == mes_sel]
-if marca_sel != "Todas": df = df[df["MARCA"] == marca_sel]
-if sel_patentes: df = df[df["DOMINIO"].isin(sel_patentes)]
+# 4. LÓGICA DE COMPARACIÓN (MES ACTUAL VS ANTERIOR)
+mes_actual = df_full[df_full["MES_VAL_tel"] == mes_sel]
+mes_previo = df_full[df_full["MES_VAL_tel"] == (mes_sel - 1)]
 
-# 4. VISTAS
-if df.empty:
-    st.warning("⚠️ Sin datos para los filtros seleccionados.")
+if marca_sel != "Todas":
+    mes_actual = mes_actual[mes_actual["MARCA"] == marca_sel]
+    mes_previo = mes_previo[mes_previo["MARCA"] == marca_sel]
+
+# 5. DASHBOARD DE EMISIONES
+st.title(f"🌿 Dashboard de Sustentabilidad — {mes_sel}")
+st.caption("Análisis de huella de carbono y eficiencia energética de la flota.")
+
+if mes_actual.empty:
+    st.warning("No hay datos para el mes seleccionado.")
 else:
-    # --- PESTAÑA 1: DESEMPEÑO ---
-    if portal == "📊 Desempeño":
-        st.title("🚛 Fleet Analytics - Desempeño General")
-        
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Km Totales", f"{df['DISTANCIA RECORRIDA TELEMETRIA'].sum():,.0f}")
-        c2.metric("L/100km Promedio", f"{df['Consumo c/ 100km TELEMETRIA'].mean():.2f}")
-        c3.metric("Litros Totales", f"{df['LITROS CONSUMIDOS'].sum():,.0f}")
-        c4.metric("Unidades Activas", len(df['DOMINIO'].unique()))
+    # --- MÉTRICAS DE IMPACTO ---
+    c1, c2, c3, c4 = st.columns(4)
+    
+    # Cálculo CO2 Total
+    co2_now = mes_actual['Emisiones (KG CO2)'].sum()
+    co2_prev = mes_previo['Emisiones (KG CO2)'].sum()
+    delta_co2 = ((co2_now - co2_prev) / co2_prev * 100) if co2_prev > 0 else 0
+    c1.metric("CO₂ TOTAL EMITIDO", f"{co2_now:,.0f} kg", delta=f"{delta_co2:.1f}%" if co2_prev > 0 else None, delta_color="inverse")
 
-        st.subheader("📍 Dispersión: Consumo vs Distancia")
-        df_plot = df.copy()
-        df_plot['Ralenti (Lts)'] = df_plot['Ralenti (Lts)'].fillna(0).clip(lower=0)
-        df_plot['size_burbuja'] = df_plot['Ralenti (Lts)'] + 5
-        
-        fig = px.scatter(df_plot, x="DISTANCIA RECORRIDA TELEMETRIA", y="LITROS CONSUMIDOS", 
-                         color="DOMINIO", size="size_burbuja", hover_name="DOMINIO",
-                         template="plotly_dark")
-        fig.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig, use_container_width=True)
+    # Intensidad (g/km)
+    km_now = mes_actual['DISTANCIA RECORRIDA TELEMETRIA'].sum()
+    int_now = (co2_now / km_now * 1000) if km_now > 0 else 0
+    c2.metric("INTENSIDAD DE CARBONO", f"{int_now:.1f} g/km", help="Gramos de CO2 emitidos por cada kilómetro recorrido.")
 
-    # --- PESTAÑA 2: COMBUSTIBLE & COSTOS ---
-    elif portal == "⛽ Combustible & Costos":
-        st.title("⛽ Control de Combustible y Costos")
-        
-        col_gauge, col_metrics = st.columns([1, 1.2])
-        
-        with col_gauge:
-            prom_l100 = df['Consumo c/ 100km TELEMETRIA'].mean()
-            fig_gauge = go.Figure(go.Indicator(
-                mode = "gauge+number",
-                value = prom_l100,
-                title = {'text': "L/100km Flota", 'font': {'size': 20}},
-                gauge = {
-                    'axis': {'range': [None, 60]},
-                    'bar': {'color': "#1565c0"},
-                    'steps': [
-                        {'range': [0, 32], 'color': "green"},
-                        {'range': [32, 40], 'color': "yellow"},
-                        {'range': [40, 60], 'color': "red"}]}))
-            fig_gauge.update_layout(paper_bgcolor='rgba(0,0,0,0)', font={'color': "white"}, height=300)
-            st.plotly_chart(fig_gauge, use_container_width=True)
+    # Ahorro potencial (Ralentí a 0)
+    ahorro_co2 = mes_actual['Ralenti (Lts)'].sum() * 2.68 # Coeficiente diésel
+    c3.metric("CO₂ POR RALENTÍ", f"{ahorro_co2:,.1f} kg", delta="Evitable", delta_color="off")
 
-        with col_metrics:
-            precio_gasoil = 1250 
-            ral_tot = df['Ralenti (Lts)'].sum()
-            costo_total_ralenti = ral_tot * precio_gasoil
-            
-            m1, m2 = st.columns(2)
-            m1.metric("Ralentí Total", f"{ral_tot:,.0f} L")
-            m2.metric("Costo Ralentí (Est.)", f"$ {costo_total_ralenti:,.0f}", delta="Pérdida", delta_color="inverse")
-            
-            # Ranking de consumo por dominio
-            df_rank = df.groupby('DOMINIO')['Consumo c/ 100km TELEMETRIA'].mean().reset_index().sort_values('Consumo c/ 100km TELEMETRIA', ascending=False)
-            fig_rank = px.bar(df_rank, x='DOMINIO', y='Consumo c/ 100km TELEMETRIA', color='Consumo c/ 100km TELEMETRIA', 
-                              color_continuous_scale='RdYlGn_r', template="plotly_dark", title="Ranking L/100km")
-            fig_rank.add_hline(y=prom_l100, line_dash="dash", line_color="white", annotation_text="Media")
-            fig_rank.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=250)
-            st.plotly_chart(fig_rank, use_container_width=True)
+    # Árboles necesarios para compensar (Cálculo estimado: 1 árbol absorbe 20kg/año)
+    arboles = co2_now / 20
+    c4.metric("COMPENSACIÓN", f"{int(arboles)} Árboles", help="Árboles necesarios por un año para absorber este mes de emisiones.")
 
-        st.divider()
-        st.subheader("Suma de Litros Consumidos por Unidad")
-        fig_lts = px.bar(df.sort_values("LITROS CONSUMIDOS", ascending=False), x="DOMINIO", y="LITROS CONSUMIDOS", 
-                         color="LITROS CONSUMIDOS", color_continuous_scale="Blues", template="plotly_dark")
-        fig_lts.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_lts, use_container_width=True)
+    st.divider()
 
-    # --- PESTAÑA 3: EMISIONES ---
-    elif portal == "🌿 Emisiones":
-        st.title("🌿 Portal de Sustentabilidad")
-        
-        e1, e2, e3 = st.columns(3)
-        total_co2 = df['Emisiones (KG CO2)'].sum()
-        km_tot = df['DISTANCIA RECORRIDA TELEMETRIA'].sum()
-        e1.metric("CO2 Total (kg)", f"{total_co2:,.0f}")
-        e2.metric("Eficiencia (gCO2/km)", f"{(total_co2/km_tot*1000):.1f}" if km_tot > 0 else "0")
-        e3.metric("Kms/Mes Promedio", f"{(km_tot/1000):.1f} mil")
+    # --- GRÁFICOS ---
+    col_l, col_r = st.columns([1.5, 1])
 
-        st.divider()
-        fig_co2 = px.bar(df.sort_values("Emisiones (KG CO2)", ascending=False),
-                         x="DOMINIO", y="Emisiones (KG CO2)", color="Emisiones (KG CO2)",
-                         template="plotly_dark", color_continuous_scale="Reds", title="Emisiones por Patente")
-        fig_co2.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_co2, use_container_width=True)
+    with col_l:
+        st.subheader("📊 Huella de Carbono por Unidad (kg CO2)")
+        df_rank = mes_actual.sort_values("Emisiones (KG CO2)", ascending=False)
+        fig_bar = px.bar(df_rank, x="DOMINIO", y="Emisiones (KG CO2)", color="Emisiones (KG CO2)",
+                         color_continuous_scale="RdYlGn_r", template="plotly_dark")
+        fig_bar.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_bar, use_container_width=True)
 
-# 5. FOOTER
+    with col_r:
+        st.subheader("📉 Distribución por Marca")
+        fig_pie = px.pie(mes_actual, values='Emisiones (KG CO2)', names='MARCA', 
+                         hole=0.4, color_discrete_sequence=px.colors.sequential.Greens_r)
+        fig_pie.update_layout(paper_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    # --- TABLA DE LIDERAZGO ---
+    st.subheader("📋 Ranking de Eficiencia Ambiental")
+    mes_actual['g_CO2_km'] = (mes_actual['Emisiones (KG CO2)'] / mes_actual['DISTANCIA RECORRIDA TELEMETRIA']) * 1000
+    df_table = mes_actual[['DOMINIO', 'MARCA', 'DISTANCIA RECORRIDA TELEMETRIA', 'Emisiones (KG CO2)', 'g_CO2_km']].sort_values('g_CO2_km')
+    
+    st.dataframe(df_table.style.format({'g_CO2_km': '{:.1f}', 'Emisiones (KG CO2)': '{:,.0f}'}), use_container_width=True)
+
+# 6. FOOTER
 st.divider()
-st.caption(f"Fleet Analytics Expreso Diemar | Datos Actualizados | Registros: {len(df)}")
+st.caption(f"Exclusivo Sustentabilidad - Expreso Diemar | Datos: {len(mes_actual)} registros activos.")
