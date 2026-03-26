@@ -99,7 +99,6 @@ else:
 
         st.subheader("📍 Dispersión: Consumo vs Distancia")
         df_plot = df.copy()
-        # Arreglo de escala para evitar el error rojo
         df_plot['Ralenti (Lts)'] = df_plot['Ralenti (Lts)'].fillna(0).clip(lower=0)
         df_plot['size_burbuja'] = df_plot['Ralenti (Lts)'] + 5
         
@@ -134,11 +133,13 @@ else:
         with col_metrics:
             precio_gasoil = 1250 
             ral_tot = df['Ralenti (Lts)'].sum()
-            m1, m2 = st.columns(2)
-            m1.metric("Ralentí Total (Lts)", f"{ral_tot:,.0f} L")
-            m2.metric("Costo Ralentí (Est.)", f"${(ral_tot * precio_gasoil):, .0f}", delta_color="inverse")
+            costo_total_ralenti = ral_tot * precio_gasoil
             
-            # Gráfico de barras L/100km por patente
+            m1, m2 = st.columns(2)
+            m1.metric("Ralentí Total", f"{ral_tot:,.0f} L")
+            # CORRECCIÓN DE ERROR DE SINTAXIS AQUÍ:
+            m2.metric("Costo Ralentí (Est.)", f"$ {costo_total_ralenti:,.0f}", delta="Pérdida", delta_color="inverse")
+            
             df_rank = df.groupby('DOMINIO')['Consumo c/ 100km TELEMETRIA'].mean().reset_index().sort_values('Consumo c/ 100km TELEMETRIA', ascending=False)
             fig_rank = px.bar(df_rank, x='DOMINIO', y='Consumo c/ 100km TELEMETRIA', color='Consumo c/ 100km TELEMETRIA', 
                               color_continuous_scale='RdYlGn_r', template="plotly_dark", title="Ranking de Consumo")
