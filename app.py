@@ -56,6 +56,11 @@ def get_data():
             d['MES'] = d['FECHA_DT'].dt.strftime('%B %Y')
 
     df = pd.merge(df_tel, df_con, on="DOMINIO", suffixes=('_tel', '_con'))
+    
+    # Rango de fechas sugerido para ver datos reales
+    if not df.empty and 'FECHA_DT_tel' in df.columns:
+        df = df[(df['FECHA_DT_tel'] >= '2025-12-01') & (df['FECHA_DT_tel'] <= '2026-03-31')].copy()
+
     return df
 
 try:
@@ -73,16 +78,19 @@ with st.sidebar:
     st.divider()
     if not df_full.empty:
         meses = ["Todos"] + sorted(df_full["MES_tel"].dropna().unique().tolist())
-        mes_sel = st.selectbox("📅 Mes", meses)
+        mes_sel = st.selectbox("📅 Filtrar Mes", meses)
         
         marcas = ["Todas"] + sorted(df_full["MARCA"].dropna().unique().tolist())
         marca_sel = st.selectbox("🏭 Marca", marcas)
+        
+        patentes = sorted(df_full["DOMINIO"].unique().tolist())
+        sel_patentes = st.multiselect("🚚 Patentes Específicas", patentes)
 
+# Aplicar Filtros
 df = df_full.copy()
-if mes_sel != "Todos":
-    df = df[df["MES_tel"] == mes_sel]
-if marca_sel != "Todas":
-    df = df[df["MARCA"] == marca_sel]
+if mes_sel != "Todos": df = df[df["MES_tel"] == mes_sel]
+if marca_sel != "Todas": df = df[df["MARCA"] == marca_sel]
+if sel_patentes: df = df[df["DOMINIO"].isin(sel_patentes)]
 
 # 4. VISTAS
 if df.empty:
@@ -92,10 +100,11 @@ else:
     if portal == "📊 Desempeño":
         st.title("🚛 Fleet Analytics - Desempeño General")
         
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Km Totales", f"{df['DISTANCIA RECORRIDA TELEMETRIA'].sum():,.0f}")
         c2.metric("L/100km Promedio", f"{df['Consumo c/ 100km TELEMETRIA'].mean():.2f}")
         c3.metric("Litros Totales", f"{df['LITROS CONSUMIDOS'].sum():,.0f}")
+        c4.metric("Unidades Activas", len(df['DOMINIO'].unique()))
 
         st.subheader("📍 Dispersión: Consumo vs Distancia")
         df_plot = df.copy()
@@ -119,7 +128,7 @@ else:
             fig_gauge = go.Figure(go.Indicator(
                 mode = "gauge+number",
                 value = prom_l100,
-                title = {'text': "L/100km Promedio Flota", 'font': {'size': 20}},
+                title = {'text': "L/100km Flota", 'font': {'size': 20}},
                 gauge = {
                     'axis': {'range': [None, 60]},
                     'bar': {'color': "#1565c0"},
@@ -137,24 +146,33 @@ else:
             
             m1, m2 = st.columns(2)
             m1.metric("Ralentí Total", f"{ral_tot:,.0f} L")
-            # CORRECCIÓN DE ERROR DE SINTAXIS AQUÍ:
             m2.metric("Costo Ralentí (Est.)", f"$ {costo_total_ralenti:,.0f}", delta="Pérdida", delta_color="inverse")
             
+            # Ranking de consumo por dominio
             df_rank = df.groupby('DOMINIO')['Consumo c/ 100km TELEMETRIA'].mean().reset_index().sort_values('Consumo c/ 100km TELEMETRIA', ascending=False)
             fig_rank = px.bar(df_rank, x='DOMINIO', y='Consumo c/ 100km TELEMETRIA', color='Consumo c/ 100km TELEMETRIA', 
-                              color_continuous_scale='RdYlGn_r', template="plotly_dark", title="Ranking de Consumo")
+                              color_continuous_scale='RdYlGn_r', template="plotly_dark", title="Ranking L/100km")
+            fig_rank.add_hline(y=prom_l100, line_dash="dash", line_color="white", annotation_text="Media")
             fig_rank.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=250)
             st.plotly_chart(fig_rank, use_container_width=True)
+
+        st.divider()
+        st.subheader("Suma de Litros Consumidos por Unidad")
+        fig_lts = px.bar(df.sort_values("LITROS CONSUMIDOS", ascending=False), x="DOMINIO", y="LITROS CONSUMIDOS", 
+                         color="LITROS CONSUMIDOS", color_continuous_scale="Blues", template="plotly_dark")
+        fig_lts.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_lts, use_container_width=True)
 
     # --- PESTAÑA 3: EMISIONES ---
     elif portal == "🌿 Emisiones":
         st.title("🌿 Portal de Sustentabilidad")
         
-        e1, e2 = st.columns(2)
+        e1, e2, e3 = st.columns(3)
         total_co2 = df['Emisiones (KG CO2)'].sum()
         km_tot = df['DISTANCIA RECORRIDA TELEMETRIA'].sum()
         e1.metric("CO2 Total (kg)", f"{total_co2:,.0f}")
         e2.metric("Eficiencia (gCO2/km)", f"{(total_co2/km_tot*1000):.1f}" if km_tot > 0 else "0")
+        e3.metric("Kms/Mes Promedio", f"{(km_tot/1000):.1f} mil")
 
         st.divider()
         fig_co2 = px.bar(df.sort_values("Emisiones (KG CO2)", ascending=False),
@@ -165,4 +183,4 @@ else:
 
 # 5. FOOTER
 st.divider()
-st.caption(f"Fleet Analytics Expreso Diemar | Datos procesados: {len(df)} registros.")
+st.caption(f"Fleet Analytics Expreso Diemar | Datos Actualizados | Registros: {len(df)}")
