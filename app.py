@@ -36,7 +36,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# 2. CARGA Y FILTRADO POR AÑO 2026
+# 2. CARGA Y CRUCE FLEXIBLE
 @st.cache_data(ttl=600)
 def get_data():
     u1 = "https://expresodiemar-my.sharepoint.com/:x:/g/personal/nicolascolonna_expresodiemar_onmicrosoft_com/IQCCJG7r9T2JTb0eAdpQU1ggAcTn9ZELfjq58Xk9-eqj58o?download=1"
@@ -48,35 +48,30 @@ def get_data():
         r = requests.get(url, headers=headers)
         return pd.read_excel(io.BytesIO(r.content))
 
-    df_tel_raw = download(u1)
-    df_con_raw = download(u2)
+    df_tel = download(u1)
+    df_con = download(u2)
     
-    dataframes_finales = []
-    
-    for d in [df_tel_raw, df_con_raw]:
-        # Limpieza de nombres de columnas
+    # Limpieza de Dominios y Nombres
+    for d in [df_tel, df_con]:
         d.columns = d.columns.str.strip().str.replace('í', 'i').str.replace('á', 'a')
-        
-        if 'FECHA' in d.columns:
-            # Convertir a datetime
-            d['FECHA_DT'] = pd.to_datetime(d['FECHA'], errors='coerce')
-            # FILTRO CRÍTICO: Solo año 2026
-            d = d[d['FECHA_DT'].dt.year == 2026].copy()
-            # Dejar solo la fecha para el cruce
-            d['FECHA'] = d['FECHA_DT'].dt.date
-        
         if 'DOMINIO' in d.columns:
             d['DOMINIO'] = d['DOMINIO'].astype(str).str.replace(' ', '').str.upper()
-            
-        dataframes_finales.append(d)
+        if 'FECHA' in d.columns:
+            d['FECHA_DT'] = pd.to_datetime(d['FECHA'], errors='coerce')
 
-    df_tel, df_con = dataframes_finales
-            
-    # CRUCE DE DATOS (Solo 2026 con 2026)
-    df = pd.merge(df_tel, df_con, on=["FECHA", "DOMINIO"])
+    # UNIÓN FLEXIBLE: Primero por Dominio
+    # Usamos "how='inner'" para quedarnos solo con lo que está en ambos archivos
+    df = pd.merge(df_tel, df_con, on="DOMINIO", suffixes=('_tel', '_con'))
     
+    # Filtro de Año 2026 sobre el resultado
+    if not df.empty and 'FECHA_DT_tel' in df.columns:
+        df = df[df['FECHA_DT_tel'].dt.year == 2026].copy()
+
     if not df.empty:
-        df['g_co2_km'] = (df['Emisiones (KG CO2)'] / df['DISTANCIA RECORRIDA TELEMETRIA']) * 1000
+        # Cálculo de CO2
+        dist = df['DISTANCIA RECORRIDA TELEMETRIA']
+        emi = df['Emisiones (KG CO2)']
+        df['g_co2_km'] = (emi / dist * 1000) if dist.sum() > 0 else 0
     
     return df
 
@@ -84,7 +79,7 @@ def get_data():
 try:
     df_full = get_data()
 except Exception as e:
-    st.error(f"❌ Error: {e}")
+    st.error(f"❌ Error crítico: {e}")
     st.stop()
 
 # 3. SIDEBAR
@@ -107,8 +102,8 @@ if marca_sel != "Todas":
 
 # 4. VISTAS
 if df.empty:
-    st.warning("⚠️ No hay datos de 2026 que coincidan en ambos archivos.")
-    st.info("Asegurate de que los registros de 2026 en Telemetría tengan su par en Conducción.")
+    st.warning("⚠️ Sin datos coincidentes para 2026.")
+    st.info("Esto sucede si las patentes del archivo de 19 filas no están presentes en el de 290 filas.")
 else:
     if portal == "📊 Desempeño de Flota":
         st.title("🚛 Fleet Analytics 2026")
@@ -119,7 +114,7 @@ else:
 
         st.plotly_chart(px.scatter(df, x="DISTANCIA RECORRIDA TELEMETRIA", y="LITROS CONSUMIDOS", 
                                    color="DOMINIO", size="Ralenti (Lts)", hover_name="DOMINIO",
-                                   template="plotly_dark", title="Eficiencia de Consumo 2026"), use_container_width=True)
+                                   template="plotly_dark"), use_container_width=True)
 
     elif portal == "🌿 Portal de Emisiones CO2":
         st.title("🌿 Sustentabilidad 2026")
@@ -131,6 +126,6 @@ else:
                          template="plotly_dark", color_continuous_scale="Reds")
         st.plotly_chart(fig_co2, use_container_width=True)
 
-# FOOTER
+# 5. FOOTER
 st.divider()
-st.caption(f"Exclusivo 2026 | Registros procesados: {len(df)}")
+st.caption(f"Registros procesados: {len(df)}")
