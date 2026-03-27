@@ -2,120 +2,104 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.express as px
-import requests
-import io
 
-# 1. CONFIGURACIÓN Y ESTÉTICA
-st.set_page_config(page_title="Expreso Diemar - Carbon Tracker", layout="wide")
+# 1. ESTÉTICA "DARK LOGÍSTICA"
+st.set_page_config(page_title="Expreso Diemar - Flota Pro", layout="wide")
 
 st.markdown("""
     <style>
-    .stApp {
-        background: linear-gradient(rgba(0, 0, 0, 0.9), rgba(0, 0, 0, 0.9)), 
-                    url("https://raw.githubusercontent.com/nicolascolonna23/DetectorDesvios/main/IMG_3101.jpg"); 
-        background-size: cover; background-attachment: fixed;
-    }
-    [data-testid="stSidebar"] { background-color: rgba(10, 15, 10, 0.98); }
-    .stMetric {
-        background-color: rgba(255, 255, 255, 0.05);
-        padding: 15px; border-radius: 10px; border-top: 4px solid #2e7d32;
-    }
-    h1, h2, h3, h4, span, p { color: white !important; }
+    .stApp { background-color: #0e1117; }
+    [data-testid="stMetricValue"] { color: #2e7d32 !important; font-weight: bold; }
+    .stMetric { background-color: rgba(255, 255, 255, 0.05); padding: 15px; border-radius: 10px; border-left: 5px solid #2e7d32; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. CARGA DESDE GOOGLE SHEETS
-@st.cache_data(ttl=300) # Actualiza cada 5 minutos
-def get_sheets_data():
-    # URL Base del documento (Modo exportar CSV)
+# 2. CARGA DE DATOS (TTL bajado a 60 segundos para actualización rápida)
+@st.cache_data(ttl=60)
+def get_all_data():
     base_url = "https://docs.google.com/spreadsheets/d/1u7cckay0IJ60bfoKk2OZo-TjCvTbH9O1wKxNFdSKDCQ/export?format=csv"
+    gid_tel = "1044040871" # Pestaña Telemetría
+    gid_uni = "882343299"  # Pestaña Datos Unidades
     
-    # GIDs específicos de tus pestañas
-    gid_telemetria = "1044040871"
-    gid_unidades = "882343299"
+    df_tel = pd.read_csv(f"{base_url}&gid={gid_tel}")
+    df_uni = pd.read_csv(f"{base_url}&gid={gid_uni}")
     
-    # Descarga de hojas
-    df_tel = pd.read_csv(f"{base_url}&gid={gid_telemetria}")
-    df_con = pd.read_csv(f"{base_url}&gid={gid_unidades}")
-    
-    # Limpieza de nombres y formatos
-    for d in [df_tel, df_con]:
-        d.columns = d.columns.str.strip().str.replace('í', 'i').str.replace('á', 'a')
-        if 'DOMINIO' in d.columns:
-            d['DOMINIO'] = d['DOMINIO'].astype(str).str.replace(' ', '').str.upper()
+    # Limpieza de nombres y fechas
+    for d in [df_tel, df_uni]:
+        d.columns = d.columns.str.strip().str.upper()
         if 'FECHA' in d.columns:
             d['FECHA_DT'] = pd.to_datetime(d['FECHA'], errors='coerce')
-            d['KEY_TIEMPO'] = d['FECHA_DT'].dt.strftime('%Y-%m')
+            d['MES_AÑO'] = d['FECHA_DT'].dt.strftime('%b %Y') # Ej: Jan 2026
+            d['ORDEN_MES'] = d['FECHA_DT'].dt.to_period('M')
 
-    # UNIÓN: Pegamos las dos hojas por Patente y Mes
-    df = pd.merge(df_tel, df_con, on=["DOMINIO", "KEY_TIEMPO"], suffixes=('_tel', '_con'))
-    return df
+    # Unión por Dominio y Mes/Año
+    df = pd.merge(df_tel, df_uni, on=["DOMINIO", "MES_AÑO"], suffixes=('', '_DROP'))
+    return df.loc[:,~df.columns.str.contains('_DROP')]
 
 try:
-    df_master = get_sheets_data()
+    df_raw = get_all_data()
 except Exception as e:
-    st.error(f"❌ Error al leer Google Sheets: {e}")
-    st.info("Asegúrate de que el Google Sheet sea 'Público' o tenga el acceso compartido por enlace.")
-    st.stop()
+    st.error(f"Error: {e}"); st.stop()
 
-# 3. SIDEBAR Y FILTROS
+# 3. SIDEBAR: FILTROS DINÁMICOS
 with st.sidebar:
-    st.image("https://raw.githubusercontent.com/nicolascolonna23/DetectorDesvios/main/logo_diemar4.png", width=200) # Cambié a URL por si no tenés el archivo local
-    st.divider()
-    meses_cruzados = sorted(df_master["KEY_TIEMPO"].unique().tolist())
-    mes_sel = st.selectbox("📅 Período de Análisis", meses_cruzados)
-    marcas = ["Todas"] + sorted(df_master["MARCA"].unique().tolist())
-    marca_sel = st.selectbox("🏭 Filtrar Marca", marcas)
+    st.title("🚛 Panel de Control")
+    # Filtro de Mes
+    lista_meses = sorted(df_raw['MES_AÑO'].unique(), reverse=True)
+    mes_sel = st.selectbox("Seleccionar Mes", lista_meses)
+    
+    # Filtro de Marca
+    marcas = ["Todas"] + sorted(df_raw['MARCA'].unique().tolist())
+    marca_sel = st.selectbox("Marca de Camión", marcas)
 
-df_actual = df_master[df_master["KEY_TIEMPO"] == mes_sel]
-idx_actual = meses_cruzados.index(mes_sel)
-df_previo = df_master[df_master["KEY_TIEMPO"] == meses_cruzados[idx_actual-1]] if idx_actual > 0 else pd.DataFrame()
-
+# Filtrado de datos
+df_filtrado = df_raw[df_raw['MES_AÑO'] == mes_sel]
 if marca_sel != "Todas":
-    df_actual = df_actual[df_actual["MARCA"] == marca_sel]
-    df_previo = df_previo[df_previo["MARCA"] == marca_sel]
+    df_filtrado = df_filtrado[df_filtrado['MARCA'] == marca_sel]
 
-# 4. DASHBOARD
-st.title(f"🌿 Centro de Sustentabilidad — {mes_sel}")
+# 4. DASHBOARD: MÉTRICAS DE IMPACTO
+st.title(f"📊 Reporte de Operación — {mes_sel}")
 
-if df_actual.empty:
-    st.warning("No hay datos que coincidan para este período y marca.")
-else:
-    # MÉTRICAS
-    c1, c2, c3, c4 = st.columns(4)
+# Cálculos rápidos
+kms_tot = df_filtrado['DISTANCIA RECORRIDA TELEMETRIA'].sum()
+co2_tot = df_filtrado['EMISIONES (KG CO2)'].sum()
+lts_ral = df_filtrado['RALENTI (LTS)'].sum()
+# Supongamos un costo de combustible promedio (puedes ajustarlo)
+costo_estimado = (co2_tot / 2.68) * 1250 # 1L Diesel approx 2.68kg CO2
+
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Kms Recorridos", f"{kms_tot:,.0f} km")
+c2.metric("CO₂ Emitido", f"{co2_tot:,.0f} kg")
+c3.metric("Lts en Ralentí", f"{lts_ral:,.0f} L")
+c4.metric("Gasto Comb. Est.", f"$ {costo_estimado:,.0f}")
+
+st.divider()
+
+# 5. ANÁLISIS POR UNIDAD
+col_a, col_b = st.columns(2)
+
+with col_a:
+    st.subheader("🌲 Compensación Ambiental")
+    arboles = int(co2_tot / 20)
+    st.info(f"Para compensar este mes se necesitan **{arboles} árboles** creciendo por un año.")
     
-    co2_now = df_actual['Emisiones (KG CO2)'].sum()
-    co2_prev = df_previo['Emisiones (KG CO2)'].sum() if not df_previo.empty else 0
-    delta_co2 = ((co2_now - co2_prev) / co2_prev * 100) if co2_prev > 0 else 0
-    
-    c1.metric("CO₂ EMITIDO", f"{co2_now:,.0f} kg", delta=f"{delta_co2:.1f}%" if co2_prev > 0 else None, delta_color="inverse")
-    
-    kms = df_actual['DISTANCIA RECORRIDA TELEMETRIA'].sum()
-    c2.metric("KM RECORRIDOS", f"{kms:,.0f} km")
-    
-    lts_ral = df_actual['Ralenti (Lts)'].sum()
-    c3.metric("LTS EN RALENTÍ", f"{lts_ral:,.1f} L", delta="Reducible", delta_color="off")
-    
-    arboles = int(co2_now / 20)
-    c4.metric("COMPENSACIÓN", f"{arboles} Árboles", help="Basado en 20kg CO2/año por árbol.")
+    # Gráfico de barras de emisiones por patente
+    fig_emisiones = px.bar(df_filtrado, x='DOMINIO', y='EMISIONES (KG CO2)', 
+                           color='EMISIONES (KG CO2)', color_continuous_scale='Greens',
+                           template="plotly_dark", title="Ranking de Huella por Patente")
+    st.plotly_chart(fig_emisiones, use_container_width=True)
 
-    st.divider()
+with col_b:
+    st.subheader("📉 Eficiencia de Ralentí")
+    # Gráfico de dispersión: Distancia vs Ralentí
+    fig_scatter = px.scatter(df_filtrado, x='DISTANCIA RECORRIDA TELEMETRIA', y='RALENTI (LTS)',
+                             hover_name='DOMINIO', size='EMISIONES (KG CO2)', color='MARCA',
+                             template="plotly_dark", title="Distancia vs Ralentí (Tamaño = CO2)")
+    st.plotly_chart(fig_scatter, use_container_width=True)
 
-    # GRÁFICOS
-    col_l, col_r = st.columns([1.5, 1])
-    with col_l:
-        st.subheader("📊 Emisiones por Patente")
-        fig_bar = px.bar(df_actual.sort_values("Emisiones (KG CO2)", ascending=False), 
-                         x="DOMINIO", y="Emisiones (KG CO2)", color="Emisiones (KG CO2)",
-                         color_continuous_scale="Greens", template="plotly_dark")
-        st.plotly_chart(fig_bar, use_container_width=True)
+# 6. TABLA DETALLADA
+st.subheader("📋 Auditoría de Unidades")
+st.dataframe(df_filtrado[['DOMINIO', 'MARCA', 'FECHA', 'DISTANCIA RECORRIDA TELEMETRIA', 'EMISIONES (KG CO2)', 'RALENTI (LTS)']], 
+             use_container_width=True)
 
-    with col_r:
-        st.subheader("📉 CO₂ por Marca")
-        fig_pie = px.pie(df_actual, values='Emisiones (KG CO2)', names='MARCA', hole=0.4)
-        st.plotly_chart(fig_pie, use_container_width=True)
-
-    st.subheader("📋 Auditoría de Datos")
-    st.dataframe(df_actual[['DOMINIO', 'MARCA', 'FECHA_DT', 'DISTANCIA RECORRIDA TELEMETRIA', 'Emisiones (KG CO2)']], use_container_width=True)
-
-st.caption("Conectado a Google Sheets | Actualización automática activa")
+st.caption("Los datos se sincronizan con Google Sheets cada 60 segundos.")
