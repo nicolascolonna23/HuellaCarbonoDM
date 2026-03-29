@@ -20,10 +20,12 @@ st.markdown("""
 # 2. CARGA DE DATOS
 @st.cache_data(ttl=60)
 def get_clean_data():
-    base_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR35NkYPtJrOrdYHLGUH7GIW93s5cPAqQ0zEk5fP1c3gvErwbUW7HJ2OeWBYaBVsYKVmCf0yhLvs6eG/pub?output=csv"
+    # URL directa al spreadsheet correcto
+    SHEET_ID = "1u7cckay0IJ60bfoKk2OZo-TjCvTbH9O1wKxNFdSKDCQ"
+    base_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
 
-    # gid=882343299  -> Emisiones/Telemetria: CO2, RALENTI (FUENTE PRINCIPAL - tiene todos los meses)
-    # gid=1044040871 -> Combustible/KMS: KMS, MARCA (puede no tener todos los meses)
+    # gid=882343299  -> Telemetria: FECHA, DOMINIO, RALENTI, CO2 (FUENTE PRINCIPAL)
+    # gid=1044040871 -> Combustible: FECHA, DOMINIO, KMS, MARCA
     df_emi = pd.read_csv(f"{base_url}&gid=882343299")
     df_kms = pd.read_csv(f"{base_url}&gid=1044040871")
 
@@ -57,7 +59,6 @@ def get_clean_data():
     df_emi = normalizar(df_emi)
     df_kms = normalizar(df_kms)
 
-    # Crear MES y normalizar DOMINIO en ambas hojas
     for d in [df_emi, df_kms]:
         if 'DOMINIO' in d.columns:
             d['DOMINIO'] = d['DOMINIO'].astype(str).str.replace(' ', '').str.upper()
@@ -65,7 +66,6 @@ def get_clean_data():
             d['FECHA_DT'] = pd.to_datetime(d['FECHA'], dayfirst=True, errors='coerce')
             d['MES'] = d['FECHA_DT'].dt.strftime('%Y-%m')
 
-    # Tabla de lookup MARCA por DOMINIO (para completar meses sin datos KMS)
     if 'MARCA' in df_kms.columns and 'DOMINIO' in df_kms.columns:
         marca_lookup = (df_kms[['DOMINIO', 'MARCA']]
                         .dropna(subset=['MARCA'])
@@ -73,13 +73,11 @@ def get_clean_data():
     else:
         marca_lookup = pd.DataFrame(columns=['DOMINIO', 'MARCA'])
 
-    # FIX MERGE: LEFT JOIN desde emisiones para NO perder meses que faltan en KMS
-    # Asi febrero 2026 (que existe en emisiones pero no en KMS) aparece igual
+    # LEFT JOIN desde emisiones para NO perder meses sin datos en KMS
     cols_kms = [c for c in ['DOMINIO', 'MES', 'KMS'] if c in df_kms.columns]
     df = pd.merge(df_emi, df_kms[cols_kms], on=["DOMINIO", "MES"], how='left', suffixes=('', '_DROP'))
     df = df.loc[:, ~df.columns.str.contains('_DROP')]
 
-    # Completar MARCA con el lookup (para meses que no tienen datos KMS)
     if 'MARCA' not in df.columns:
         df = df.merge(marca_lookup, on='DOMINIO', how='left')
     elif df['MARCA'].isna().all():
@@ -89,7 +87,6 @@ def get_clean_data():
         df['MARCA'] = df['MARCA'].fillna(df['MARCA_FILL'])
         df = df.drop(columns=['MARCA_FILL'], errors='ignore')
 
-    # Rellenar KMS sin datos con 0
     if 'KMS' in df.columns:
         df['KMS'] = df['KMS'].fillna(0)
 
