@@ -151,34 +151,40 @@ def get_data():
     df_emi = process_sheet(df_emi)
     df_kms = process_sheet(df_kms)
 
-    # Preparar lookup de KMS y MARCA desde df_kms
-    kms_cols = ['DOMINIO', 'MES', 'KMS']
-    if 'MARCA' in df_kms.columns:
-        kms_cols.append('MARCA')
-    df_kms_red = (df_kms[kms_cols]
-                  .dropna(subset=['DOMINIO','MES'])
-                  .drop_duplicates(subset=['DOMINIO','MES']))
+    # ── Agregar df_emi a nivel mensual por unidad ──────────────────────────────
+    emi_agg_cols = {'CO2': 'sum', 'RALENTI': 'sum'}
+    if 'MARCA' in df_emi.columns:
+        emi_agg_cols['MARCA'] = 'first'
+    emi_monthly = (df_emi.dropna(subset=['DOMINIO','MES'])
+                   .groupby(['DOMINIO','MES'], as_index=False)
+                   .agg(emi_agg_cols))
 
-    # Merge
-    df = df_emi.merge(df_kms_red, on=['DOMINIO','MES'], how='left', suffixes=('','_KF'))
+    # ── Agregar df_kms a nivel mensual por unidad (SUMA de KMS) ───────────────
+    kms_agg_cols = {'KMS': 'sum'}
+    if 'MARCA' in df_kms.columns:
+        kms_agg_cols['MARCA'] = 'first'
+    kms_monthly = (df_kms.dropna(subset=['DOMINIO','MES'])
+                   .groupby(['DOMINIO','MES'], as_index=False)
+                   .agg(kms_agg_cols))
+
+    # ── Merge ──────────────────────────────────────────────────────────────────
+    df = emi_monthly.merge(kms_monthly, on=['DOMINIO','MES'], how='left', suffixes=('','_KF'))
 
     # Consolidar KMS
     if 'KMS_KF' in df.columns:
-        df['KMS'] = df['KMS_KF'].where(df['KMS_KF'] > 0, df['KMS'])
+        df['KMS'] = df['KMS_KF'].where(df['KMS_KF'] > 0, df.get('KMS', pd.Series(0, index=df.index)))
         df.drop(columns=['KMS_KF'], inplace=True)
+    elif 'KMS' not in df.columns:
+        df['KMS'] = 0.0
 
     # Consolidar MARCA
     if 'MARCA_KF' in df.columns:
-        if 'MARCA' not in df.columns:
-            df['MARCA'] = df['MARCA_KF']
-        else:
-            df['MARCA'] = df['MARCA'].fillna(df['MARCA_KF'])
+        df['MARCA'] = df['MARCA'].fillna(df['MARCA_KF']) if 'MARCA' in df.columns else df['MARCA_KF']
         df.drop(columns=['MARCA_KF'], inplace=True)
-
     if 'MARCA' not in df.columns:
         df['MARCA'] = 'Sin marca'
 
-    # Métricas derivadas
+    # ── Métricas derivadas ─────────────────────────────────────────────────────
     df['CO2_RALENTI'] = df['RALENTI'] * FACTOR_CO2
     df['CO2_DIRECTO'] = np.maximum(df['CO2'] - df['CO2_RALENTI'], 0)
     df['INTENSIDAD']  = np.where(df['KMS'] > 0, df['CO2'] / df['KMS'] * 1000, 0)
