@@ -86,66 +86,85 @@ BASE_URL  = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=cs
 
 @st.cache_data(ttl=120)
 def get_data():
-    # Usar el tab TELEMETRIA (gid=0) — fuente única con todos los datos al día
-    df = pd.read_csv(f"{BASE_URL}&gid=0")
+    df1 = pd.read_csv(f"{BASE_URL}&gid=0")          # TELEMETRIA
+    df2 = pd.read_csv(f"{BASE_URL}&gid=882343299")   # DATOS UNIDADES (con RALENTI)
 
-    def parse_num(s):
-        return pd.to_numeric(
-            s.astype(str)
-             .str.replace(r'\s', '', regex=True)
-             .str.replace('.', '', regex=False)
-             .str.replace(',', '.', regex=False),
-            errors='coerce'
-        ).fillna(0)
+    def limpiar(df):
+        df.columns = [str(c).strip().upper() for c in df.columns]
+        df = df.loc[:, ~df.columns.duplicated()]
+        cm = {}
+        for c in df.columns:
+            if   "DOMINIO"   in c or "PATENTE"  in c: cm[c] = "DOMINIO"
+            elif "LITROS"    in c or "CONSUMID" in c: cm[c] = "LITROS"
+            elif "DISTANCIA" in c or c == "KM" or "KILOMETR" in c: cm[c] = "KMS"
+            elif "MARCA"     in c:                    cm[c] = "MARCA"
+            elif "TAG"       in c:                    cm[c] = "TAG"
+            elif "FECHA"     in c or "DATE" in c:     cm[c] = "FECHA"
+            elif "RALENT"    in c:                    cm[c] = "RALENTI"
+            elif "EMPRESA"   in c:                    cm[c] = "EMPRESA"
+        df = df.rename(columns=cm)
+        df = df.loc[:, ~df.columns.duplicated()]
+        if "DOMINIO" in df.columns:
+            df["DOMINIO"] = df["DOMINIO"].astype(str).str.strip().str.upper()
+        for col in ["LITROS", "KMS", "RALENTI"]:
+            if col in df.columns:
+                s = df[col]
+                if isinstance(s, pd.DataFrame): s = s.iloc[:, 0]
+                df[col] = pd.to_numeric(
+                    s.astype(str).str.replace(".", "", regex=False).str.replace(",", ".", regex=False),
+                    errors="coerce").fillna(0)
+        if "FECHA" in df.columns:
+            df["FECHA"] = pd.to_datetime(df["FECHA"], errors="coerce", dayfirst=True)
+        return df
 
-    # Normalizar columnas
-    df.columns = (df.columns.str.strip().str.upper()
-                  .str.replace('Í','I').str.replace('Á','A')
-                  .str.replace('É','E').str.replace('Ó','O').str.replace('Ú','U'))
+    df1 = limpiar(df1)
+    df2 = limpiar(df2)
 
-    # Mapeo: primera columna que coincide por destino
-    m, usados = {}, set()
-    for c in df.columns:
-        if   "DOMINIO"  in c and "DOMINIO"  not in usados: m[c]="DOMINIO";  usados.add("DOMINIO")
-        elif "FECHA"    in c and "FECHA"    not in usados: m[c]="FECHA";    usados.add("FECHA")
-        elif "MARCA"    in c and "MARCA"    not in usados: m[c]="MARCA";    usados.add("MARCA")
-        elif ("RALENTI" in c or "IDLE" in c) and "RALENTI" not in usados: m[c]="RALENTI"; usados.add("RALENTI")
-        elif ("DISTANCIA" in c or ("KM" in c and "100" not in c and "CONSUMO" not in c)) and "LITRO" not in c and "KMS" not in usados:
-            m[c]="KMS"; usados.add("KMS")
-        elif ("LITRO" in c or "LTS" in c or "CONSUMID" in c) and "100" not in c and "LITROS" not in usados:
-            m[c]="LITROS"; usados.add("LITROS")
-    df = df.rename(columns=m)
+    # Merge RALENTI desde df2 (DATOS UNIDADES) por DOMINIO + mes — igual que app.py
+    if 'RALENTI' in df2.columns and 'DOMINIO' in df2.columns and 'FECHA' in df2.columns:
+        df2_ral = df2[['DOMINIO','FECHA','RALENTI']].copy()
+        df2_ral = df2_ral[df2_ral['RALENTI'] > 0]
+        df2_ral['_MES'] = df2_ral['FECHA'].dt.to_period('M')
+        df1['_MES'] = df1['FECHA'].dt.to_period('M')
+        df1 = df1.merge(
+            df2_ral[['DOMINIO','_MES','RALENTI']].rename(columns={'RALENTI':'_RAL_u'}),
+            on=['DOMINIO','_MES'], how='left'
+        )
+        df1['RALENTI'] = df1.get('_RAL_u', pd.Series(0, index=df1.index)).fillna(0)
+        df1.drop(columns=['_RAL_u','_MES'], inplace=True, errors='ignore')
+    elif 'RALENTI' not in df1.columns:
+        df1['RALENTI'] = 0.0
 
-    # Parsear numéricos
-    for col in ["KMS", "LITROS", "RALENTI"]:
-        if col not in df.columns:
-            df[col] = 0.0
-        else:
-            df[col] = parse_num(df[col])
+    # Filtrar solo flota LAD/DIEMAR — igual que app.py
+    if "EMPRESA" in df1.columns:
+        df1 = df1[df1["EMPRESA"].astype(str).str.upper().str.contains("LAD|DIEMAR", na=False)]
 
-    # DOMINIO limpio
-    if 'DOMINIO' in df.columns:
-        df['DOMINIO'] = df['DOMINIO'].astype(str).str.strip().str.upper()
-        df = df[df['DOMINIO'].str.match(r'^[A-Z]{2}\d{3}[A-Z]{2}$|^[A-Z]{2}\d{3}[A-Z]{3}$', na=False)]
+    # Filtrar por unidades conocidas de df2
+    if "DOMINIO" in df2.columns and not df2.empty:
+        lad_units = df2["DOMINIO"].dropna().unique()
+        if len(lad_units) > 0:
+            df1 = df1[df1["DOMINIO"].isin(lad_units)]
 
-    # Fechas → MES
-    if 'FECHA' in df.columns:
-        df['FECHA_DT'] = pd.to_datetime(df['FECHA'], dayfirst=True, errors='coerce')
-        df['MES'] = df['FECHA_DT'].dt.strftime('%Y-%m')
+    # MES desde FECHA
+    df1['MES'] = df1['FECHA'].dt.strftime('%Y-%m')
 
-    # CO2 calculado desde litros
-    df['CO2'] = df['LITROS'] * FACTOR_CO2
+    # Solo 2026 en adelante
+    df1 = df1[df1['MES'] >= '2026-01']
 
     # MARCA fallback
-    if 'MARCA' not in df.columns:
-        df['MARCA'] = 'Sin marca'
+    if 'MARCA' not in df1.columns:
+        df1['MARCA'] = 'Sin marca'
+
+    # CO2 desde litros
+    df1['CO2'] = df1['LITROS'] * FACTOR_CO2
 
     # Agregar a nivel mensual por unidad
-    agg_cols = {'CO2': 'sum', 'KMS': 'sum', 'LITROS': 'sum', 'RALENTI': 'sum', 'MARCA': 'first'}
-    agg_cols = {k: v for k, v in agg_cols.items() if k in df.columns}
-    df = (df.dropna(subset=['DOMINIO','MES'])
-            .groupby(['DOMINIO','MES'], as_index=False)
-            .agg(agg_cols))
+    agg_cols = {k: v for k, v in
+                {'CO2':'sum','KMS':'sum','LITROS':'sum','RALENTI':'sum','MARCA':'first'}.items()
+                if k in df1.columns}
+    df = (df1.dropna(subset=['DOMINIO','MES'])
+              .groupby(['DOMINIO','MES'], as_index=False)
+              .agg(agg_cols))
 
     # Métricas derivadas
     df['CO2_RALENTI'] = df['RALENTI'] * FACTOR_CO2
