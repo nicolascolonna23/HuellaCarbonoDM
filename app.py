@@ -142,7 +142,7 @@ def get_data():
         for c in df.columns:
             if   "DOMINIO" in c:                              m[c] = "DOMINIO"
             elif "FECHA"   in c:                              m[c] = "FECHA"
-            elif ("KM" in c or "DISTANCIA" in c) and "CO2" not in c and "L/100" not in c: m[c] = "KMS"
+            elif ("KM" in c or "KILOM" in c or "DISTANCIA" in c or "RECORRID" in c) and "CO2" not in c and "L/100" not in c: m[c] = "KMS"
             elif "CO2"     in c or "EMISION" in c:           m[c] = "CO2"
             elif "RALENTI" in c:                              m[c] = "RALENTI"
             elif "MARCA"   in c:                              m[c] = "MARCA"
@@ -171,7 +171,10 @@ def get_data():
     df = df_emi.merge(df_kms[cols_k], on=['DOMINIO','MES'], how='left',
                       suffixes=('','_DROP'))
     df = df.loc[:, ~df.columns.str.contains('_DROP')]
-    if 'KMS' in df.columns: df['KMS'] = df['KMS'].fillna(0)
+    if 'KMS' in df.columns:
+        df['KMS'] = df['KMS'].fillna(0)
+    else:
+        df['KMS'] = 0  # columna no encontrada en la hoja
 
     # MARCA
     if 'MARCA' not in df.columns or df['MARCA'].isna().all():
@@ -184,7 +187,7 @@ def get_data():
     # Métricas derivadas
     df['CO2_RALENTI'] = df['RALENTI'] * FACTOR_CO2 if 'RALENTI' in df.columns else 0
     df['CO2_DIRECTO'] = np.maximum(df['CO2'] - df['CO2_RALENTI'], 0)
-    df['INTENSIDAD']  = np.where(df['KMS']>0, df['CO2']/df['KMS']*1000, np.nan)  # g/km
+    df['INTENSIDAD']  = np.where(df['KMS'] > 0, df['CO2'] / df['KMS'] * 1000, np.nan)  # g/km
 
     return df
 
