@@ -88,7 +88,7 @@ html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
 .equiv-icon  { font-size: 2.4rem; display: block; margin-bottom: 10px; }
 .equiv-num   { font-size: 2rem; font-weight: 800; color: #86efac; line-height: 1; }
 .equiv-label { font-size: .75rem; color: #6b9e70; margin-top: 6px;
-               font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
+                font-weight: 600; text-transform: uppercase; letter-spacing: .5px; }
 
 /* Sección */
 .sec-title {
@@ -140,40 +140,37 @@ def get_data():
                       .str.replace('É','E').str.replace('Ó','O'))
         m = {}
         for c in df.columns:
-            if   "DOMINIO" in c:                              m[c] = "DOMINIO"
-            elif "FECHA"   in c:                              m[c] = "FECHA"
+            if   "DOMINIO" in c:                                     m[c] = "DOMINIO"
+            elif "FECHA"   in c:                                     m[c] = "FECHA"
             elif ("KM" in c or "KILOM" in c or "DISTANCIA" in c or "RECORRID" in c) and "CO2" not in c and "L/100" not in c: m[c] = "KMS"
-            elif "CO2"     in c or "EMISION" in c:           m[c] = "CO2"
-            elif "RALENTI" in c:                              m[c] = "RALENTI"
-            elif "MARCA"   in c:                              m[c] = "MARCA"
+            elif "CO2"     in c or "EMISION" in c:                   m[c] = "CO2"
+            elif "RALENTI" in c:                                     m[c] = "RALENTI"
+            elif "MARCA"   in c:                                     m[c] = "MARCA"
         df = df.rename(columns=m)
         for nc in ["KMS","CO2","RALENTI"]:
             if nc in df.columns:
                 df[nc] = pd.to_numeric(
                     df[nc].astype(str).str.replace('.','',regex=False).str.replace(',','.',regex=False),
                     errors='coerce').fillna(0)
+        
         if 'DOMINIO' in df.columns:
-            df['DOMINIO'] = df['DOMINIO'].astype(str).str.replace(' ','').str.upper()
+            df['DOMINIO'] = df['DOMINIO'].astype(str).str.strip().str.replace(' ','').str.upper()
+        
+        # --- CORRECCIÓN DE FECHA/MES ---
         if 'FECHA' in df.columns:
-            # Intentar múltiples formatos de fecha
+            # Intentar convertir FECHA a datetime y luego estandarizar a YYYY-MM
             df['FECHA_DT'] = pd.to_datetime(df['FECHA'], dayfirst=True, errors='coerce')
-            # Fallback para formatos sin día (ej: "03/2026", "2026-03", "mar-26")
-            mask_nat = df['FECHA_DT'].isna() & df['FECHA'].notna()
+            
+            # Fallback si el formato no tiene día (ej: "2026-03")
+            mask_nat = df['FECHA_DT'].isna()
             if mask_nat.any():
-                for fmt in ('%m/%Y', '%Y-%m', '%b-%y', '%B-%Y', '%m-%Y'):
-                    still_nat = df['FECHA_DT'].isna() & df['FECHA'].notna()
-                    if not still_nat.any():
-                        break
-                    df.loc[still_nat, 'FECHA_DT'] = pd.to_datetime(
-                        df.loc[still_nat, 'FECHA'], format=fmt, errors='coerce')
+                df.loc[mask_nat, 'FECHA_DT'] = pd.to_datetime(df.loc[mask_nat, 'FECHA'], errors='coerce')
+            
             df['MES'] = df['FECHA_DT'].dt.strftime('%Y-%m')
-        # Si ya hay columna MES en los datos originales (ej: "2026-03"), úsala como fallback
-        elif 'MES' not in df.columns:
-            # buscar columna que parezca período (AAAA-MM)
-            for c in df.columns:
-                if df[c].astype(str).str.match(r'^\d{4}-\d{2}$').any():
-                    df['MES'] = df[c].astype(str)
-                    break
+        
+        if 'MES' in df.columns:
+            df['MES'] = df['MES'].astype(str).str.strip()
+            
         return df
 
     df_emi = norm(df_emi)
@@ -184,14 +181,17 @@ def get_data():
                 .drop_duplicates('DOMINIO', keep='last')
                 if 'MARCA' in df_kms.columns else pd.DataFrame(columns=['DOMINIO','MARCA']))
 
+    # UNIÓN CORREGIDA: Aseguramos que el merge use las columnas normalizadas
     cols_k = [c for c in ['DOMINIO','MES','KMS'] if c in df_kms.columns]
     df = df_emi.merge(df_kms[cols_k], on=['DOMINIO','MES'], how='left',
-                      suffixes=('','_DROP'))
+                      suffixes=('', '_DROP'))
+    
     df = df.loc[:, ~df.columns.str.contains('_DROP')]
+    
     if 'KMS' in df.columns:
         df['KMS'] = df['KMS'].fillna(0)
     else:
-        df['KMS'] = 0  # columna no encontrada en la hoja
+        df['KMS'] = 0
 
     # MARCA
     if 'MARCA' not in df.columns or df['MARCA'].isna().all():
@@ -239,7 +239,7 @@ if marca_sel != "Todas" and 'MARCA' in df.columns:
 
 # Período anterior equivalente (misma cantidad de meses, inmediatamente anterior)
 meses_en_rango = sorted(df[(df['MES'] >= mes_desde) & (df['MES'] <= mes_hasta)
-                           ]['MES'].unique().tolist()) if not df.empty else []
+                            ]['MES'].unique().tolist()) if not df.empty else []
 n_rango   = max(len(meses_en_rango), 1)
 idx_desde = meses_disp.index(mes_desde) if mes_desde in meses_disp else 0
 if idx_desde >= n_rango:
