@@ -202,34 +202,50 @@ except Exception as e:
 with st.sidebar:
     st.image("https://raw.githubusercontent.com/nicolascolonna23/HuellaCarbonoDM/main/logo_diemar4.png", width=180)
     st.markdown("---")
-    meses_disp = sorted(df_master['MES'].dropna().unique().tolist(), reverse=True)
-    mes_sel = st.selectbox("📅 Período", meses_disp)
+    meses_disp = sorted(df_master['MES'].dropna().unique().tolist())   # ASC
+    n_meses    = len(meses_disp)
+    st.markdown("<div style='font-size:.8rem;color:#6b9e70;font-weight:600;'>📅 Período</div>", unsafe_allow_html=True)
+    mes_desde  = st.selectbox("Desde", meses_disp, index=0)
+    mes_hasta  = st.selectbox("Hasta", meses_disp, index=n_meses - 1)
+    # corregir si Desde > Hasta
+    if mes_desde > mes_hasta:
+        mes_desde, mes_hasta = mes_hasta, mes_desde
     marcas_disp = ["Todas"] + sorted(df_master['MARCA'].dropna().unique().tolist()) if 'MARCA' in df_master.columns else ["Todas"]
     marca_sel = st.selectbox("🚛 Marca", marcas_disp)
     st.markdown("---")
     st.markdown(f"<div style='font-size:.72rem;color:#4ade80;'>🔄 Actualización cada 2 min</div>", unsafe_allow_html=True)
 
 # ── Filtro ─────────────────────────────────────────────────────────────────────
-df = df_master[df_master['MES'] == mes_sel].copy()
+df = df_master[(df_master['MES'] >= mes_desde) & (df_master['MES'] <= mes_hasta)].copy()
 if marca_sel != "Todas" and 'MARCA' in df.columns:
     df = df[df['MARCA'] == marca_sel]
 
-# Mes anterior para delta
-idx_mes = meses_disp.index(mes_sel)
-mes_ant  = meses_disp[idx_mes + 1] if idx_mes + 1 < len(meses_disp) else None
-df_ant   = df_master[df_master['MES'] == mes_ant].copy() if mes_ant else pd.DataFrame()
+# Período anterior equivalente (misma cantidad de meses, inmediatamente anterior)
+meses_en_rango = sorted(df[(df['MES'] >= mes_desde) & (df['MES'] <= mes_hasta)
+                           ]['MES'].unique().tolist()) if not df.empty else []
+n_rango   = max(len(meses_en_rango), 1)
+idx_desde = meses_disp.index(mes_desde) if mes_desde in meses_disp else 0
+if idx_desde >= n_rango:
+    ant_hasta = meses_disp[idx_desde - 1]
+    ant_desde = meses_disp[max(0, idx_desde - n_rango)]
+    df_ant = df_master[(df_master['MES'] >= ant_desde) & (df_master['MES'] <= ant_hasta)].copy()
+else:
+    df_ant = pd.DataFrame()
 if marca_sel != "Todas" and not df_ant.empty and 'MARCA' in df_ant.columns:
     df_ant = df_ant[df_ant['MARCA'] == marca_sel]
 
+# Etiqueta del período seleccionado
+periodo_label = mes_desde if mes_desde == mes_hasta else f"{mes_desde} → {mes_hasta}"
+
 def delta_html(curr, prev, invert=False):
-    """Devuelve HTML del delta vs mes anterior."""
+    """Devuelve HTML del delta vs período anterior."""
     if prev == 0 or pd.isna(prev): return '<span class="delta-flat">— sin dato prev.</span>'
     pct = (curr - prev) / abs(prev) * 100
-    if abs(pct) < 0.5: return f'<span class="delta-flat">≈ igual al mes anterior</span>'
+    if abs(pct) < 0.5: return f'<span class="delta-flat">≈ igual al período anterior</span>'
     up = pct > 0
     css = "delta-up" if (up and not invert) or (not up and invert) else "delta-down"
     arrow = "▲" if up else "▼"
-    return f'<span class="{css}">{arrow} {abs(pct):.1f}% vs mes anterior</span>'
+    return f'<span class="{css}">{arrow} {abs(pct):.1f}% vs período anterior</span>'
 
 # ── Métricas globales ──────────────────────────────────────────────────────────
 co2_total  = df['CO2'].sum()          if 'CO2'     in df.columns else 0
@@ -259,7 +275,7 @@ if df.empty:
 st.markdown(f"""
 <div style="margin-bottom:24px;">
   <div style="font-size:1.7rem;font-weight:800;color:#f0fdf4;letter-spacing:-.5px;">
-    🌿 Carbon Tracker — {mes_sel}
+    🌿 Carbon Tracker — {periodo_label}
   </div>
   <div style="font-size:.88rem;color:#6b9e70;margin-top:4px;">
     Flota Expreso Diemar · {df['DOMINIO'].nunique()} unidades activas
@@ -361,7 +377,7 @@ with col_der:
         st.markdown('<div class="sec-title">Intensidad por marca</div>', unsafe_allow_html=True)
         int_marca = (df[df['KMS']>0].groupby('MARCA')
                      .apply(lambda x: x['CO2'].sum() / x['KMS'].sum() * 1000)
-                     .reset_index(name='g_km').sort_values('g_km'))
+                     .rename('g_km').reset_index().sort_values('g_km'))
         fig_int = go.Figure(go.Bar(
             x=int_marca['g_km'], y=int_marca['MARCA'],
             orientation='h',
@@ -412,10 +428,14 @@ fig_trend.add_trace(go.Scatter(
     marker=dict(size=5, color='#a78bfa'),
     hovertemplate='%{x}<br>Intensidad: <b>%{y:.1f} g/km</b><extra></extra>'
 ))
-# Línea del mes seleccionado
+# Líneas del rango seleccionado
 fig_trend.add_vline(
-    x=mes_sel, line_dash='dot', line_color='rgba(255,255,255,0.3)', line_width=1.5,
-    annotation_text='▶ hoy', annotation_font_color='#94a3b8', annotation_font_size=10)
+    x=mes_desde, line_dash='dot', line_color='rgba(255,255,255,0.3)', line_width=1.5,
+    annotation_text='◀ inicio', annotation_font_color='#94a3b8', annotation_font_size=10)
+if mes_hasta != mes_desde:
+    fig_trend.add_vline(
+        x=mes_hasta, line_dash='dot', line_color='rgba(255,255,255,0.3)', line_width=1.5,
+        annotation_text='▶ fin', annotation_font_color='#94a3b8', annotation_font_size=10)
 
 fig_trend.update_layout(
     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(5,26,10,0.4)',
