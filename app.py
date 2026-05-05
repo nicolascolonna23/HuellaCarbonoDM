@@ -94,15 +94,22 @@ def get_data():
         df.columns = (df.columns.str.strip().str.upper()
                       .str.replace('Í','I').str.replace('Á','A')
                       .str.replace('É','E').str.replace('Ó','O').str.replace('Ú','U'))
-        # Mapeo inteligente de columnas
+        # Mapeo inteligente de columnas — solo la PRIMERA columna que coincide por destino
         m = {}
+        usados = set()
         for c in df.columns:
-            if   "DOMINIO" in c:                                                  m[c] = "DOMINIO"
-            elif "FECHA"   in c:                                                  m[c] = "FECHA"
-            elif "MARCA"   in c:                                                  m[c] = "MARCA"
-            elif "RALENTI" in c or "IDLE" in c:                                   m[c] = "RALENTI"
-            elif ("KM" in c or "KILOM" in c or "DISTANCIA" in c) and "CO2" not in c: m[c] = "KMS"
-            elif "CO2"     in c or "EMISION" in c:                                m[c] = "CO2"
+            if   "DOMINIO" in c and "DOMINIO" not in usados:
+                m[c] = "DOMINIO";  usados.add("DOMINIO")
+            elif "FECHA"   in c and "FECHA"   not in usados:
+                m[c] = "FECHA";    usados.add("FECHA")
+            elif "MARCA"   in c and "MARCA"   not in usados:
+                m[c] = "MARCA";    usados.add("MARCA")
+            elif ("RALENTI" in c or "IDLE" in c) and "RALENTI" not in usados:
+                m[c] = "RALENTI";  usados.add("RALENTI")
+            elif ("KM" in c or "KILOM" in c or "DISTANCIA" in c) and "CO2" not in c and "KMS" not in usados:
+                m[c] = "KMS";      usados.add("KMS")
+            elif ("CO2" in c or "EMISION" in c) and "CO2" not in usados:
+                m[c] = "CO2";      usados.add("CO2")
         df = df.rename(columns=m)
 
         # Parseo numérico — maneja miles con punto y decimales con coma
