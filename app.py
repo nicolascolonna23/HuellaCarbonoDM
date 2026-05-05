@@ -86,105 +86,68 @@ BASE_URL  = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=cs
 
 @st.cache_data(ttl=120)
 def get_data():
-    df_emi = pd.read_csv(f"{BASE_URL}&gid=882343299")
-    df_kms = pd.read_csv(f"{BASE_URL}&gid=1044040871")
+    # Usar el tab TELEMETRIA (gid=0) — fuente única con todos los datos al día
+    df = pd.read_csv(f"{BASE_URL}&gid=0")
 
-    def process_sheet(df):
-        # Normalizar nombres de columnas
-        df.columns = (df.columns.str.strip().str.upper()
-                      .str.replace('Í','I').str.replace('Á','A')
-                      .str.replace('É','E').str.replace('Ó','O').str.replace('Ú','U'))
-        # Mapeo inteligente de columnas — solo la PRIMERA columna que coincide por destino
-        m = {}
-        usados = set()
-        for c in df.columns:
-            if   "DOMINIO" in c and "DOMINIO" not in usados:
-                m[c] = "DOMINIO";  usados.add("DOMINIO")
-            elif "FECHA"   in c and "FECHA"   not in usados:
-                m[c] = "FECHA";    usados.add("FECHA")
-            elif "MARCA"   in c and "MARCA"   not in usados:
-                m[c] = "MARCA";    usados.add("MARCA")
-            elif ("RALENTI" in c or "IDLE" in c) and "RALENTI" not in usados:
-                m[c] = "RALENTI";  usados.add("RALENTI")
-            elif ("KM" in c or "KILOM" in c or "DISTANCIA" in c) and "CO2" not in c and "KMS" not in usados:
-                m[c] = "KMS";      usados.add("KMS")
-            elif ("CO2" in c or "EMISION" in c) and "CO2" not in usados:
-                m[c] = "CO2";      usados.add("CO2")
-        df = df.rename(columns=m)
+    def parse_num(s):
+        return pd.to_numeric(
+            s.astype(str)
+             .str.replace(r'\s', '', regex=True)
+             .str.replace('.', '', regex=False)
+             .str.replace(',', '.', regex=False),
+            errors='coerce'
+        ).fillna(0)
 
-        # Parseo numérico — maneja miles con punto y decimales con coma
-        def parse_num(series):
-            return pd.to_numeric(
-                series.astype(str)
-                      .str.replace(r'\s', '', regex=True)
-                      .str.replace('.', '', regex=False)   # quitar miles
-                      .str.replace(',', '.', regex=False), # decimal
-                errors='coerce'
-            ).fillna(0)
+    # Normalizar columnas
+    df.columns = (df.columns.str.strip().str.upper()
+                  .str.replace('Í','I').str.replace('Á','A')
+                  .str.replace('É','E').str.replace('Ó','O').str.replace('Ú','U'))
 
-        for col in ["KMS", "CO2", "RALENTI"]:
-            if col not in df.columns:
-                df[col] = 0.0
-            else:
-                df[col] = parse_num(df[col])
+    # Mapeo: primera columna que coincide por destino
+    m, usados = {}, set()
+    for c in df.columns:
+        if   "DOMINIO"  in c and "DOMINIO"  not in usados: m[c]="DOMINIO";  usados.add("DOMINIO")
+        elif "FECHA"    in c and "FECHA"    not in usados: m[c]="FECHA";    usados.add("FECHA")
+        elif "MARCA"    in c and "MARCA"    not in usados: m[c]="MARCA";    usados.add("MARCA")
+        elif ("RALENTI" in c or "IDLE" in c) and "RALENTI" not in usados: m[c]="RALENTI"; usados.add("RALENTI")
+        elif ("DISTANCIA" in c or ("KM" in c and "100" not in c and "CONSUMO" not in c)) and "LITRO" not in c and "KMS" not in usados:
+            m[c]="KMS"; usados.add("KMS")
+        elif ("LITRO" in c or "LTS" in c or "CONSUMID" in c) and "100" not in c and "LITROS" not in usados:
+            m[c]="LITROS"; usados.add("LITROS")
+    df = df.rename(columns=m)
 
-        if 'DOMINIO' in df.columns:
-            df['DOMINIO'] = df['DOMINIO'].astype(str).str.strip().str.upper()
+    # Parsear numéricos
+    for col in ["KMS", "LITROS", "RALENTI"]:
+        if col not in df.columns:
+            df[col] = 0.0
+        else:
+            df[col] = parse_num(df[col])
 
-        if 'FECHA' in df.columns:
-            df['FECHA_DT'] = pd.to_datetime(df['FECHA'], dayfirst=True, errors='coerce')
-            # Fallback para formatos sin día (ej: "03/2026", "2026-03")
-            mask = df['FECHA_DT'].isna() & df['FECHA'].notna()
-            if mask.any():
-                for fmt in ('%m/%Y', '%Y-%m', '%m-%Y', '%b-%y', '%B-%Y'):
-                    still = df['FECHA_DT'].isna() & df['FECHA'].notna()
-                    if not still.any():
-                        break
-                    df.loc[still, 'FECHA_DT'] = pd.to_datetime(
-                        df.loc[still, 'FECHA'], format=fmt, errors='coerce')
-            df['MES'] = df['FECHA_DT'].dt.strftime('%Y-%m')
-            # Último fallback: si ya viene como YYYY-MM directamente
-            mask2 = df['MES'].isna() & df['FECHA'].astype(str).str.match(r'^\d{4}-\d{2}')
-            df.loc[mask2, 'MES'] = df.loc[mask2, 'FECHA'].astype(str).str[:7]
-        return df
+    # DOMINIO limpio
+    if 'DOMINIO' in df.columns:
+        df['DOMINIO'] = df['DOMINIO'].astype(str).str.strip().str.upper()
+        df = df[df['DOMINIO'].str.match(r'^[A-Z]{2}\d{3}[A-Z]{2}$|^[A-Z]{2}\d{3}[A-Z]{3}$', na=False)]
 
-    df_emi = process_sheet(df_emi)
-    df_kms = process_sheet(df_kms)
+    # Fechas → MES
+    if 'FECHA' in df.columns:
+        df['FECHA_DT'] = pd.to_datetime(df['FECHA'], dayfirst=True, errors='coerce')
+        df['MES'] = df['FECHA_DT'].dt.strftime('%Y-%m')
 
-    # ── Agregar df_emi a nivel mensual por unidad ──────────────────────────────
-    emi_agg_cols = {'CO2': 'sum', 'RALENTI': 'sum'}
-    if 'MARCA' in df_emi.columns:
-        emi_agg_cols['MARCA'] = 'first'
-    emi_monthly = (df_emi.dropna(subset=['DOMINIO','MES'])
-                   .groupby(['DOMINIO','MES'], as_index=False)
-                   .agg(emi_agg_cols))
+    # CO2 calculado desde litros
+    df['CO2'] = df['LITROS'] * FACTOR_CO2
 
-    # ── Agregar df_kms a nivel mensual por unidad (SUMA de KMS) ───────────────
-    kms_agg_cols = {'KMS': 'sum'}
-    if 'MARCA' in df_kms.columns:
-        kms_agg_cols['MARCA'] = 'first'
-    kms_monthly = (df_kms.dropna(subset=['DOMINIO','MES'])
-                   .groupby(['DOMINIO','MES'], as_index=False)
-                   .agg(kms_agg_cols))
-
-    # ── Merge ──────────────────────────────────────────────────────────────────
-    df = emi_monthly.merge(kms_monthly, on=['DOMINIO','MES'], how='left', suffixes=('','_KF'))
-
-    # Consolidar KMS
-    if 'KMS_KF' in df.columns:
-        df['KMS'] = df['KMS_KF'].where(df['KMS_KF'] > 0, df.get('KMS', pd.Series(0, index=df.index)))
-        df.drop(columns=['KMS_KF'], inplace=True)
-    elif 'KMS' not in df.columns:
-        df['KMS'] = 0.0
-
-    # Consolidar MARCA
-    if 'MARCA_KF' in df.columns:
-        df['MARCA'] = df['MARCA'].fillna(df['MARCA_KF']) if 'MARCA' in df.columns else df['MARCA_KF']
-        df.drop(columns=['MARCA_KF'], inplace=True)
+    # MARCA fallback
     if 'MARCA' not in df.columns:
         df['MARCA'] = 'Sin marca'
 
-    # ── Métricas derivadas ─────────────────────────────────────────────────────
+    # Agregar a nivel mensual por unidad
+    agg_cols = {'CO2': 'sum', 'KMS': 'sum', 'LITROS': 'sum', 'RALENTI': 'sum', 'MARCA': 'first'}
+    agg_cols = {k: v for k, v in agg_cols.items() if k in df.columns}
+    df = (df.dropna(subset=['DOMINIO','MES'])
+            .groupby(['DOMINIO','MES'], as_index=False)
+            .agg(agg_cols))
+
+    # Métricas derivadas
     df['CO2_RALENTI'] = df['RALENTI'] * FACTOR_CO2
     df['CO2_DIRECTO'] = np.maximum(df['CO2'] - df['CO2_RALENTI'], 0)
     df['INTENSIDAD']  = np.where(df['KMS'] > 0, df['CO2'] / df['KMS'] * 1000, 0)
