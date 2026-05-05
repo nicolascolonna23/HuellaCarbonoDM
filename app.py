@@ -155,8 +155,25 @@ def get_data():
         if 'DOMINIO' in df.columns:
             df['DOMINIO'] = df['DOMINIO'].astype(str).str.replace(' ','').str.upper()
         if 'FECHA' in df.columns:
+            # Intentar múltiples formatos de fecha
             df['FECHA_DT'] = pd.to_datetime(df['FECHA'], dayfirst=True, errors='coerce')
-            df['MES']      = df['FECHA_DT'].dt.strftime('%Y-%m')
+            # Fallback para formatos sin día (ej: "03/2026", "2026-03", "mar-26")
+            mask_nat = df['FECHA_DT'].isna() & df['FECHA'].notna()
+            if mask_nat.any():
+                for fmt in ('%m/%Y', '%Y-%m', '%b-%y', '%B-%Y', '%m-%Y'):
+                    still_nat = df['FECHA_DT'].isna() & df['FECHA'].notna()
+                    if not still_nat.any():
+                        break
+                    df.loc[still_nat, 'FECHA_DT'] = pd.to_datetime(
+                        df.loc[still_nat, 'FECHA'], format=fmt, errors='coerce')
+            df['MES'] = df['FECHA_DT'].dt.strftime('%Y-%m')
+        # Si ya hay columna MES en los datos originales (ej: "2026-03"), úsala como fallback
+        elif 'MES' not in df.columns:
+            # buscar columna que parezca período (AAAA-MM)
+            for c in df.columns:
+                if df[c].astype(str).str.match(r'^\d{4}-\d{2}$').any():
+                    df['MES'] = df[c].astype(str)
+                    break
         return df
 
     df_emi = norm(df_emi)
@@ -308,7 +325,7 @@ equivs = [
     (e1, "🌳", f"{arboles:,.0f}", "árboles/año para compensar"),
     (e2, "✈️", f"{vuelos:,.0f}", "vuelos BsAs–Córdoba equivalentes"),
     (e3, "🚗", f"{autos_km/1000:,.0f} k", "km en auto promedio"),
-    (e4, "🛢️", f"{co2_ral/co2_total*100:.1f}%" if co2_total > 0 else "—", "del CO2 fue por ralentí"),
+    (e4, "🌿", f"{co2_ral:,.0f} kg", "CO2 evitable (por ralentí)"),
 ]
 for col, icon, num, label in equivs:
     col.markdown(f"""
@@ -429,13 +446,9 @@ fig_trend.add_trace(go.Scatter(
     hovertemplate='%{x}<br>Intensidad: <b>%{y:.1f} g/km</b><extra></extra>'
 ))
 # Líneas del rango seleccionado
-fig_trend.add_vline(
-    x=mes_desde, line_dash='dot', line_color='rgba(255,255,255,0.3)', line_width=1.5,
-    annotation_text='◀ inicio', annotation_font_color='#94a3b8', annotation_font_size=10)
+fig_trend.add_vline(x=mes_desde, line_dash='dot', line_color='rgba(255,255,255,0.3)', line_width=1.5)
 if mes_hasta != mes_desde:
-    fig_trend.add_vline(
-        x=mes_hasta, line_dash='dot', line_color='rgba(255,255,255,0.3)', line_width=1.5,
-        annotation_text='▶ fin', annotation_font_color='#94a3b8', annotation_font_size=10)
+    fig_trend.add_vline(x=mes_hasta, line_dash='dot', line_color='rgba(255,255,255,0.3)', line_width=1.5)
 
 fig_trend.update_layout(
     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(5,26,10,0.4)',
